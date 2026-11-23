@@ -1,0 +1,1 @@
+webproxy ALL=(root) NOPASSWD: /opt/web-proxy/.venv/bin/python3 /opt/web-proxy/scripts/route_awg.py *

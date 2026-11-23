@@ -1,0 +1,21 @@
+daemon
+pidfile /run/3proxy/3proxy.pid
+log /var/log/3proxy/3proxy.log D
+logformat "- %t\t%U\t%C\t%R\t%I\t%O\t%E\t%p\t%T"
+rotate 30
+
+nserver 1.1.1.1
+nserver 8.8.8.8
+nscache 65536
+timeouts 1 5 30 60 180 1800 15 60
+
+internal 0.0.0.0
+external 0.0.0.0
+
+auth strong
+users ${{ users_file }}
+
+allow *
+
+socks -p1080
+proxy -p3128
