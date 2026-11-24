@@ -253,6 +253,7 @@ fi
 SUDOERS_TMP="$(mktemp)"
 trap 'rm -f "${SUDOERS_TMP}"' EXIT
 cat >"${SUDOERS_TMP}" <<EOF
+${APP_USER} ALL=(root) NOPASSWD: ${ROUTING_SCRIPT} --status --table ${ROUTING_TABLE}
 ${APP_USER} ALL=(root) NOPASSWD: ${ROUTING_SCRIPT} --interface ${AWG_INTERFACE} --table ${ROUTING_TABLE} --mark ${ROUTING_MARK} --priority ${ROUTING_PRIORITY} --ru-url *
 ${APP_USER} ALL=(root) NOPASSWD: ${ROUTING_SCRIPT} --interface ${AWG_INTERFACE} --table ${ROUTING_TABLE} --mark ${ROUTING_MARK} --priority ${ROUTING_PRIORITY} --ru-file *
 ${APP_USER} ALL=(root) NOPASSWD: ${ROUTING_SCRIPT} --interface ${AWG_INTERFACE} --table ${ROUTING_TABLE} --mark ${ROUTING_MARK} --priority ${ROUTING_PRIORITY} --direct *

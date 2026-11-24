@@ -716,7 +716,15 @@ sudo install -m 0440 deploy/route-helper.sudoers /etc/sudoers.d/webproxy-routing
 sudo visudo -c
 ```
 
-Пример sudoers позволяет запускать только конкретный скрипт с любыми аргументами. Для более строгой production-политики используйте разрешённый фиксированный набор аргументов и отдельный привилегированный daemon.
+Для отображения состояния приложение вызывает helper с `sudo -n`. Правило `--status` разрешает только чтение ipset/iptables/routing-данных и должно присутствовать в sudoers:
+
+```sudoers
+webproxy ALL=(root) NOPASSWD: /usr/local/sbin/webproxy-routing --status --table 100
+```
+
+При другой таблице замените `100` на значение `WEBPROXY_ROUTING_TABLE`. Установщик формирует это правило автоматически. После ручного изменения sudoers перезапустите панель и проверьте `/api/routes/status`; если ошибка осталась, проверьте `sudo -l -U webproxy` и `sudo -n -u webproxy sudo /usr/local/sbin/webproxy-routing --status --table 100`.
+
+Правила для применения изменений маршрутизации выдавайте только конкретному helper’у и согласованным параметрам. Для более строгой production-политики используйте фиксированные аргументы и отдельный привилегированный daemon.
 
 Установите systemd unit:
 

@@ -1,3 +1,4 @@
+webproxy ALL=(root) NOPASSWD: /usr/local/sbin/webproxy-routing --status --table 100
 webproxy ALL=(root) NOPASSWD: /usr/local/sbin/webproxy-routing --interface awg1 --table 100 --mark 1 --priority 100 --ru-url *
 webproxy ALL=(root) NOPASSWD: /usr/local/sbin/webproxy-routing --interface awg1 --table 100 --mark 1 --priority 100 --ru-file *
 webproxy ALL=(root) NOPASSWD: /usr/local/sbin/webproxy-routing --interface awg1 --table 100 --mark 1 --priority 100 --direct *

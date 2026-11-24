@@ -79,4 +79,7 @@ def apply(db: Session = Depends(get_db)):
 
 @router.get("/status")
 def route_status():
-    return status()
+    try:
+        return status()
+    except RoutingError as exc:
+        raise HTTPException(500, str(exc)) from exc

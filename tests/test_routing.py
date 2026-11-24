@@ -94,3 +94,20 @@ def test_policy_route_refuses_priority_conflict_before_route_change(monkeypatch)
         route_awg.configure_policy_route("awg1", "100", "1", "100")
 
     assert not any(call[:3] == ("ip", "route", "replace") for call in calls)
+
+
+def test_status_runs_netfilter_queries_and_uses_requested_table(monkeypatch):
+    calls = []
+
+    def fake_run(*args, check=True):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout=f"output from {args[0]}\n", stderr="")
+
+    monkeypatch.setattr(route_awg, "run", fake_run)
+
+    output = route_awg.status("200")
+
+    assert set(output) == {"ipsets", "iptables", "rules", "routes"}
+    assert ("ipset", "list") in calls
+    assert ("iptables", "-t", "mangle", "-n", "-v", "-L", "WEBPROXY_AWG") in calls
+    assert ("ip", "route", "show", "table", "200") in calls

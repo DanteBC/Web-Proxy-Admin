@@ -1,3 +1,4 @@
+import json
 import subprocess
 
 from app.core.config import settings
@@ -24,15 +25,27 @@ def apply_routing(extra_args: list[str] | None = None) -> str:
 
 
 def status() -> dict:
-    commands = {
-        "ipsets": ["ipset", "list"],
-        "iptables": ["iptables", "-t", "mangle", "-n", "-v", "-L", "WEBPROXY_AWG"],
-        "rules": ["ip", "rule", "show"],
-        "routes": ["ip", "route", "show", "table", settings.routing_table],
-    }
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", settings.routing_script, "--status", "--table", settings.routing_table],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RoutingError(f"Could not read routing status: {exc}") from exc
 
-    output = {}
-    for name, command in commands.items():
-        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        output[name] = result.stdout if result.returncode == 0 else f"ERROR: {result.stderr.strip()}"
+    if result.returncode != 0:
+        raise RoutingError(result.stderr.strip() or "Routing status command failed")
+
+    try:
+        output = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RoutingError("Routing status helper returned invalid JSON") from exc
+
+    if not isinstance(output, dict) or not all(
+        isinstance(output.get(name), str) for name in ("ipsets", "iptables", "rules", "routes")
+    ):
+        raise RoutingError("Routing status helper returned an unexpected response")
     return output

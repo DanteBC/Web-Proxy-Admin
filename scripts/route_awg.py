@@ -2,6 +2,7 @@
 import argparse
 import fcntl
 import ipaddress
+import json
 import os
 import pwd
 import subprocess
@@ -177,8 +178,24 @@ def remove_networks(name: str, networks: list[str]) -> None:
         run("ipset", "del", name, network, check=False)
 
 
+def status(table: str = TABLE) -> dict[str, str]:
+    commands = {
+        "ipsets": ["ipset", "list"],
+        "iptables": ["iptables", "-t", "mangle", "-n", "-v", "-L", CHAIN],
+        "rules": ["ip", "rule", "show"],
+        "routes": ["ip", "route", "show", "table", table],
+    }
+
+    output = {}
+    for name, command in commands.items():
+        result = run(*command, check=False)
+        output[name] = result.stdout if result.returncode == 0 else f"ERROR: {result.stderr.strip()}"
+    return output
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--status", action="store_true")
     parser.add_argument("--ru-url")
     parser.add_argument("--ru-file")
     parser.add_argument("--direct", nargs="*")
@@ -193,6 +210,10 @@ def main() -> None:
     args = parser.parse_args()
 
     require_root()
+    if args.status:
+        print(json.dumps(status(args.table)))
+        return
+
     LOCK.parent.mkdir(parents=True, exist_ok=True)
 
     with LOCK.open("w") as lock:
