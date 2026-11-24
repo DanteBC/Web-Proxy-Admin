@@ -359,6 +359,14 @@ PostDown = ip route del default dev %i table 100 2>/dev/null || true; ip rule de
 
 Обычно достаточно одного `PostUp`: routing helper сам создаёт ipset-наборы, цепочку iptables, policy rule и default route. Не добавляйте отдельный `ip rule replace`; `ip rule` не поддерживает эту команду на стандартном iproute2.
 
+При загрузке списка по `--ru-url` helper повторяет временные ошибки DNS/сети до четырёх раз с короткими таймаутами. Если URL всё ещё недоступен, настройка маршрутов продолжается, а существующий `ru-direct` сохраняется; предупреждение выводится в stderr. При первом запуске набор может быть пустым, и тогда российские адреса временно пойдут через AWG. После восстановления сети обновите список повторным запуском helper:
+
+```bash
+sudo /usr/local/sbin/webproxy-routing \
+  --interface awg1 --table 100 --mark 1 --priority 100 \
+  --ru-url https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone
+```
+
 Если нужен локальный список, используйте `--ru-file /path/to/ru.zone` вместо `--ru-url ...`. Директивы PostUp/PostDown могут быть ограничены конкретной реализацией Amnezia; проверьте поддержку hooks и подстановки `%i`.
 
 PostDown должен удалять только артефакты этого проекта:

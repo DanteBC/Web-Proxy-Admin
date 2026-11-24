@@ -1,8 +1,51 @@
 import subprocess
+from urllib.error import URLError
 
 import pytest
 
 from scripts import route_awg
+
+
+def test_fetch_networks_retries_temporary_dns_failure(monkeypatch):
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b"77.88.8.0/24\n"
+
+    def fake_urlopen(request, timeout):
+        calls.append((request, timeout))
+        if len(calls) == 1:
+            raise URLError("temporary failure in name resolution")
+        return Response()
+
+    monkeypatch.setattr(route_awg.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(route_awg.time, "sleep", lambda _: None)
+
+    assert route_awg.fetch_networks("https://example.test/ru.zone") == ["77.88.8.0/24"]
+    assert len(calls) == 2
+    assert calls[0][1] == route_awg.RU_FETCH_TIMEOUT
+
+
+def test_refresh_remote_set_keeps_existing_set_after_retries_fail(monkeypatch, capsys):
+    def fail_fetch(url):
+        raise RuntimeError(f"Could not load list from {url}")
+
+    monkeypatch.setattr(route_awg, "fetch_networks", fail_fetch)
+    monkeypatch.setattr(
+        route_awg,
+        "atomic_replace",
+        lambda *_: pytest.fail("The existing set must not be replaced on fetch failure"),
+    )
+
+    assert not route_awg.refresh_remote_set("ru-direct", "https://example.test/ru.zone")
+    assert "Keeping the existing ru-direct ipset" in capsys.readouterr().err
 
 
 def test_policy_route_adds_rule_and_default_route(monkeypatch):

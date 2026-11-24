@@ -5,6 +5,9 @@ import ipaddress
 import os
 import pwd
 import subprocess
+import sys
+import time
+from urllib.error import URLError
 import urllib.request
 from pathlib import Path
 
@@ -14,6 +17,8 @@ CHAIN = "WEBPROXY_AWG"
 RU_SET = "ru-direct"
 FORCE_SET = "awg-force"
 LOCK = Path("/run/webproxy-routing.lock")
+RU_FETCH_ATTEMPTS = 4
+RU_FETCH_TIMEOUT = 2
 
 
 def run(*args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -46,6 +51,40 @@ def parse_networks(raw: bytes) -> list[str]:
     if not result:
         raise ValueError("The loaded IPv4 list is empty")
     return result
+
+
+def fetch_networks(url: str) -> list[str]:
+    request = urllib.request.Request(url, headers={"User-Agent": "webproxy-routing/1.0"})
+    last_error: Exception | None = None
+
+    for attempt in range(RU_FETCH_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(request, timeout=RU_FETCH_TIMEOUT) as response:
+                return parse_networks(response.read())
+        except (URLError, TimeoutError, OSError, ValueError) as exc:
+            last_error = exc
+            if attempt + 1 < RU_FETCH_ATTEMPTS:
+                time.sleep(attempt + 1)
+
+    raise RuntimeError(
+        f"Could not load Russian network list from {url} "
+        f"after {RU_FETCH_ATTEMPTS} attempts: {last_error}"
+    ) from last_error
+
+
+def refresh_remote_set(name: str, url: str) -> bool:
+    try:
+        networks = fetch_networks(url)
+    except RuntimeError as exc:
+        print(
+            f"WARNING: {exc}. Keeping the existing {name} ipset; "
+            "if it is empty, Russian destinations may use AWG until the list is refreshed.",
+            file=sys.stderr,
+        )
+        return False
+
+    atomic_replace(name, networks)
+    return True
 
 
 def atomic_replace(name: str, networks: list[str]) -> None:
@@ -162,10 +201,7 @@ def main() -> None:
         ensure_ipset(FORCE_SET)
 
         if args.ru_url:
-            request = urllib.request.Request(args.ru_url, headers={"User-Agent": "webproxy-routing/1.0"})
-            with urllib.request.urlopen(request, timeout=20) as response:
-                networks = parse_networks(response.read())
-                atomic_replace(RU_SET, networks)
+            refresh_remote_set(RU_SET, args.ru_url)
         elif args.ru_file:
             networks = parse_networks(Path(args.ru_file).read_bytes())
             atomic_replace(RU_SET, networks)
