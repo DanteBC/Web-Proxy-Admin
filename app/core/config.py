@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     ldap_user_filter: str = "(sAMAccountName={username})"
 
     proxy_config: str = "/etc/3proxy/3proxy.cfg"
-    proxy_users_file: str = "/etc/3proxy/users"
+    proxy_users_file: str = "/var/lib/web-proxy/users"
     proxy_log_file: str = "/var/log/3proxy/3proxy.log"
     proxy_service: str = "3proxy.service"
     proxy_user: str = "3proxy"

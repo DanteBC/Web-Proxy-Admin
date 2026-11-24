@@ -90,11 +90,39 @@ def configure_chain(proxy_uid: int | None, mark: str = MARK) -> None:
 
 def configure_policy_route(interface: str, table: str = TABLE, mark: str = MARK, priority: str = "100") -> None:
     run("ip", "link", "show", "dev", interface)
-    run("ip", "route", "replace", "default", "dev", interface, "table", table)
+    rules = run("ip", "rule", "show", check=False).stdout.splitlines()
+    mark_value = mark.split("/", 1)[0]
+    target_mark = int(mark_value, 16 if mark_value.lower().startswith("0x") else 10)
+    target_table = int(table, 10) if table.isdecimal() else table
+    rule_exists = False
 
-    rule = run("ip", "rule", "show", "priority", priority, check=False).stdout
-    if f"fwmark {mark} lookup {table}" not in rule:
-        run("ip", "rule", "replace", "priority", priority, "fwmark", mark, "lookup", table)
+    for line in rules:
+        rule_priority, separator, body = line.partition(":")
+        if not separator or rule_priority.strip() != priority:
+            continue
+
+        parts = body.split()
+        try:
+            mark_index = parts.index("fwmark") + 1
+            table_index = parts.index("lookup") + 1
+            existing_mark_value = parts[mark_index].split("/", 1)[0]
+            existing_mark = int(
+                existing_mark_value,
+                16 if existing_mark_value.lower().startswith("0x") else 10,
+            )
+            raw_table = parts[table_index]
+            existing_table = int(raw_table, 10) if raw_table.isdecimal() else raw_table
+        except (ValueError, IndexError):
+            raise RuntimeError(f"Routing priority {priority} is already in use: {line.strip()}")
+
+        if existing_mark == target_mark and existing_table == target_table:
+            rule_exists = True
+            continue
+        raise RuntimeError(f"Routing priority {priority} conflicts with an existing rule: {line.strip()}")
+
+    run("ip", "route", "replace", "default", "dev", interface, "table", table)
+    if not rule_exists:
+        run("ip", "rule", "add", "priority", priority, "fwmark", mark, "lookup", table)
 
 
 def add_networks(name: str, networks: list[str]) -> None:

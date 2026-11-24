@@ -11,7 +11,6 @@ WorkingDirectory=/opt/web-proxy
 EnvironmentFile=/etc/web-proxy.env
 ExecStart=/opt/web-proxy/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=on-failure
-NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true

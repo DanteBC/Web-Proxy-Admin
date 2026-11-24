@@ -77,13 +77,14 @@ WEBPROXY_ADMIN_LOGIN=admin
 WEBPROXY_ADMIN_PASSWORD=strong-password
 
 WEBPROXY_PROXY_CONFIG=/etc/3proxy/3proxy.cfg
-WEBPROXY_PROXY_USERS_FILE=/etc/3proxy/users
+WEBPROXY_PROXY_USERS_FILE=/var/lib/web-proxy/users
 WEBPROXY_PROXY_LOG_FILE=/var/log/3proxy/3proxy.log
 WEBPROXY_PROXY_SERVICE=3proxy.service
 WEBPROXY_PROXY_USER=3proxy
+WEBPROXY_PROXY_USER=3proxy
 
 WEBPROXY_ROUTING_SCRIPT=/usr/local/sbin/webproxy-routing
-WEBPROXY_RU_URL=https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone
+WEBPROXY_RU_URL=https://www.ipdeny.com/ipblocks/data/aggregated/ru-aggregated.zone
 WEBPROXY_RU_FILE=
 WEBPROXY_AWG_INTERFACE=awg1
 WEBPROXY_ROUTING_TABLE=100
@@ -105,14 +106,21 @@ python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
 ```bash
 sudo install -d -m 0755 /etc/3proxy /var/log/3proxy
 sudo install -d -m 0755 /run/3proxy
-sudo touch /etc/3proxy/users
 sudo touch /var/log/3proxy/3proxy.log
-sudo chmod 0640 /etc/3proxy/users /var/log/3proxy/3proxy.log
-sudo chown root:root /etc/3proxy/users
+sudo chmod 0640 /var/log/3proxy/3proxy.log
 sudo chown 3proxy:3proxy /var/log/3proxy/3proxy.log
 ```
 
 Если в системе пользователь 3proxy называется иначе, замените имя во всех командах и в `WEBPROXY_PROXY_USER`.
+Для совместного управления пользователями через панель используйте файл `/var/lib/web-proxy/users`: установщик создаёт каталог и добавляет системного пользователя 3proxy в группу `webproxy`, чтобы 3proxy мог читать файл, который атомарно обновляет приложение. После добавления группы перезапустите 3proxy один раз, чтобы процесс получил новое членство.
+
+При ручной установке создайте группу/каталог и добавьте пользователя 3proxy в группу приложения:
+
+```bash
+getent group webproxy >/dev/null || sudo groupadd --system webproxy
+sudo install -d -o webproxy -g webproxy -m 0750 /var/lib/web-proxy
+sudo usermod -a -G webproxy 3proxy
+```
 
 ### 2. Базовый `3proxy.cfg`
 
@@ -134,7 +142,7 @@ internal 0.0.0.0
 external 0.0.0.0
 
 auth strong
-users $/etc/3proxy/users
+users $/var/lib/web-proxy/users
 
 allow *
 socks -p1080
@@ -165,12 +173,13 @@ bob:CL:пароль
 Создать вручную пример:
 
 ```bash
-sudo tee /etc/3proxy/users >/dev/null <<'EOF'
+sudo install -d -o webproxy -g webproxy -m 0750 /var/lib/web-proxy
+sudo tee /var/lib/web-proxy/users >/dev/null <<'EOF'
 alice:CL:strong-password
 bob:CL:strong-password
 EOF
-sudo chmod 0640 /etc/3proxy/users
-sudo chown root:3proxy /etc/3proxy/users
+sudo chmod 0640 /var/lib/web-proxy/users
+sudo chown webproxy:webproxy /var/lib/web-proxy/users
 ```
 
 ### 4. Unit и перезагрузка
@@ -231,7 +240,7 @@ sudo ip route show dev awg1
 
 ```bash
 sudo ip route replace default dev awg1 table 100
-sudo ip rule replace priority 100 fwmark 1 lookup 100
+sudo ip rule add priority 100 fwmark 1 lookup 100
 sudo ip route flush cache
 ```
 
@@ -262,16 +271,14 @@ sudo ip route show table 100
 Создайте правила и route, если профиль не создал их автоматически:
 
 ```bash
-sudo ip rule add priority 100 fwmark 1 lookup 100 2>/dev/null || true
-sudo ip route replace default dev awg1 table 100
-sudo ip route flush cache
+sudo python3 scripts/route_awg.py --interface awg1 --table 100 --mark 1 --priority 100
 ```
 
-Скрипт проекта делает те же основные операции:
+Helper проверяет, не занят ли priority `100` конфликтующим правилом, создаёт правило через `ip rule add` только при необходимости и устанавливает default route:
 
 ```bash
 sudo python3 /opt/web-proxy/scripts/route_awg.py \
-  --interface awg1 \
+  --interface awg1 --table 100 --mark 1 --priority 100 \
   --ru-url https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone
 ```
 
@@ -342,26 +349,21 @@ DNS = ...
 Table = off
 
 PostUp = /usr/local/sbin/webproxy-routing --interface %i --table 100 --mark 1 --priority 100 --ru-url https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone
-PostDown = ip route flush table 100; ip rule del priority 100 fwmark 1 lookup 100 2>/dev/null || true
+PostDown = ip route del default dev %i table 100 2>/dev/null || true; ip rule del priority 100 fwmark 1 lookup 100 2>/dev/null || true
 ```
 
 `%i` означает фактическое имя поднятого интерфейса. Не фиксируйте `awg1` в hooks, если клиент может создать другой интерфейс; скрипт и адрес route должны получать имя через `%i`.
 
 Несколько PostUp/PostDown команд разделяются точкой с запятой. Если версия клиента не выполняет `%i` или не поддерживает hooks, используйте systemd/NetworkManager hook вместо этих строк. Сами AWG-параметры профиля должны оставаться в формате вашего Amnezia-клиента, а не путаться с directive `Table`.
 
-Если клиент поддерживает две директивы `PostUp` или если AWG-клиент использует двухшаговую конфигурацию, можно разделить setup на два этапа:
+Обычно достаточно одного `PostUp`: routing helper сам создаёт ipset-наборы, цепочку iptables, policy rule и default route. Не добавляйте отдельный `ip rule replace`; `ip rule` не поддерживает эту команду на стандартном iproute2.
 
-```ini
-PostUp = ip rule replace priority 100 fwmark 1 lookup 100; ip route replace default dev %i table 100
-PostUp = /usr/local/sbin/webproxy-routing --interface %i --table 100 --mark 1 --priority 100 --ru-file /var/lib/web-proxy/ru.zone
-```
-
-Это позволяет сначала добавить policy route, а затем загрузить ipset и iptables-цепочку. Дублированные директивы `PostUp` поддерживаются не всеми реализациями/парсерами; где это не поддерживается, объедините команды одной строкой через `;` или вызывайте route-helper из одного-единственного PostUp.
+Если нужен локальный список, используйте `--ru-file /path/to/ru.zone` вместо `--ru-url ...`. Директивы PostUp/PostDown могут быть ограничены конкретной реализацией Amnezia; проверьте поддержку hooks и подстановки `%i`.
 
 PostDown должен удалять только артефакты этого проекта:
 
 ```ini
-PostDown = ip route flush table 100; ip rule del priority 100 fwmark 1 lookup 100 2>/dev/null || true
+PostDown = ip route del default dev %i table 100 2>/dev/null || true; ip rule del priority 100 fwmark 1 lookup 100 2>/dev/null || true
 ```
 
 Не выполняйте общий `iptables -F`, не удаляйте чужие fwmark-правила и не разрушайте ipset через PostDown. Оставленные ipset-наборы и iptables-цепочка не будут отправлять traffic в таблицу `100` после удаления policy route, а отдельная очистка может небезопасно повлиять на конфигурацию хоста.
@@ -535,7 +537,7 @@ sudo iptables -t mangle -A OUTPUT \
   -m comment --comment webproxy-owned-output
 
 sudo ip route replace default dev awg1 table 100
-sudo ip rule replace priority 100 fwmark 1 lookup 100
+sudo ip rule add priority 100 fwmark 1 lookup 100
 ```
 
 Не используйте `iptables -F` целиком. Скрипт панели не удаляет чужие цепочки и только очищает собственную цепочку `WEBPROXY_AWG`.
@@ -596,7 +598,54 @@ sudo systemctl enable --now webproxy-routing.service
 
 После reboot также должна восстановиться конфигурация AWG-интерфейса `awg1`. Скрипт проверяет наличие интерфейса и падает до изменения route, если интерфейс отсутствует.
 
-## Частичная установка production-приложения
+## Установка скриптом
+
+Установщик предназначен для Debian/Ubuntu с Python 3.11+ и запускается от root. Он устанавливает системные утилиты и Python, копирует приложение в `/opt/web-proxy`, создаёт пользователя `webproxy` и venv, сохраняет настройки в `/etc/web-proxy.env`, устанавливает routing helper и минимальные sudoers-правила для helper и reload 3proxy, затем включает `webproxy.service`.
+
+Из корня проекта:
+
+```bash
+sudo ./scripts/install.sh
+```
+
+Для нового окружения установщик создаёт случайный пароль администратора и session secret. Пароль администратора выводится в конце установки один раз; сохраните его. Файл окружения имеет права `0600`.
+
+Настройки сети можно задать при первой установке:
+
+```bash
+sudo env \
+  WEBPROXY_AWG_INTERFACE=awg1 \
+  WEBPROXY_ROUTING_TABLE=100 \
+  WEBPROXY_ROUTING_MARK=1 \
+  WEBPROXY_ROUTING_PRIORITY=100 \
+  WEBPROXY_RU_URL=https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone \
+  ./scripts/install.sh
+```
+
+При повторном запуске существующий `/etc/web-proxy.env` сохраняется, а значения AWG-интерфейса, таблицы, mark, priority и URL для генерируемого sudoers берутся из него. Меняйте их в этом файле и затем повторно запускайте установщик, чтобы обновить sudoers. Установщик не удаляет базу данных и не изменяет существующую конфигурацию 3proxy или AmneziaWG.
+
+После установки проверьте состояние:
+
+```bash
+sudo systemctl status webproxy.service --no-pager
+sudo journalctl -u webproxy.service -n 100 --no-pager
+sudo visudo -c
+curl -sSf http://127.0.0.1:8000/login >/dev/null
+```
+
+Установщик **не устанавливает 3proxy и AmneziaWG**, не поднимает туннель и не меняет профиль Amnezia. Настройте их отдельно. Для конфигурации с `Table = off` добавьте в секцию `[Interface]` профиля подходящие hooks, если Linux-клиент Amnezia их поддерживает:
+
+```ini
+Table = off
+PostUp = /usr/local/sbin/webproxy-routing --interface %i --table 100 --mark 1 --priority 100 --ru-url https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone
+PostDown = ip route del default dev %i table 100; ip rule del priority 100 fwmark 1 lookup 100 2>/dev/null || true
+```
+
+Если используются другие значения, подставьте их из `/etc/web-proxy.env`. Проверьте поддержку `PostUp`, `PostDown` и `%i` именно вашей версией Amnezia-клиента. Запустите helper вручную после поднятия интерфейса и проверьте `ip rule show`, `ip route show table 100` и цепочку `WEBPROXY_AWG` до включения hooks.
+
+Скрипт не переписывает `/etc/3proxy/3proxy.cfg`. Убедитесь, что директива `users` указывает на значение `WEBPROXY_PROXY_USERS_FILE` (по умолчанию после установки — `/var/lib/web-proxy/users`). Не делайте весь `/etc/3proxy` доступным на запись пользователю панели.
+
+## Ручная установка production-приложения
 
 Создайте системного пользователя:
 

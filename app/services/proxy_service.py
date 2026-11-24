@@ -1,5 +1,4 @@
 import os
-import pwd
 import shutil
 import subprocess
 import tempfile
@@ -24,13 +23,6 @@ def atomic_write(path: str, content: str, mode: int = 0o640) -> None:
             os.fsync(handle.fileno())
         os.chmod(tmp_name, mode)
         os.replace(tmp_name, target)
-
-        if settings.proxy_user:
-            try:
-                account = pwd.getpwnam(settings.proxy_user)
-                os.chown(target, account.pw_uid, account.pw_gid)
-            except KeyError:
-                pass
     except Exception:
         Path(tmp_name).unlink(missing_ok=True)
         raise
@@ -61,7 +53,7 @@ def reload_proxy() -> None:
         raise ProxyConfigError("systemctl is not available")
 
     result = subprocess.run(
-        ["systemctl", "reload", settings.proxy_service],
+        ["sudo", "-n", "systemctl", "reload", settings.proxy_service],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -71,7 +63,7 @@ def reload_proxy() -> None:
         raise ProxyConfigError(result.stderr.strip() or "Could not reload 3proxy")
 
     status = subprocess.run(
-        ["systemctl", "is-active", settings.proxy_service],
+        ["sudo", "-n", "systemctl", "is-active", settings.proxy_service],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

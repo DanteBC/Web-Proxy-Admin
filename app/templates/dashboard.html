@@ -7,6 +7,8 @@
 <section class="card"><h2>Routing rules</h2>
 <div class="actions"><input id="cidr" placeholder="192.0.2.0/24"><select id="kind"><option>DIRECT</option><option>AWG</option></select><button id="add-rule">Add</button><button id="apply-rules">Apply</button></div>
 <table><thead><tr><th>CIDR</th><th>Kind</th><th>Actions</th></tr></thead><tbody id="rules"></tbody></table></section></div>
-<section class="card"><h2>Usage</h2><table><thead><tr><th>User</th><th>Day</th><th>In</th><th>Out</th><th>Sessions</th></tr></thead><tbody id="usage"></tbody></table></section>
-<section class="card"><h2>Routing status</h2><pre id="route-status"></pre></section></main>
+<section class="card"><h2>Usage</h2><table><thead><tr><th>User</th><th>Day</th><th>In</th><th>Out</th><th>Sessions</th></tr></thead><tbody id="usage"></tbody></table>
+<section id="user-usage-detail" class="user-usage-detail" hidden aria-live="polite"></section></section>
+<section class="card"><div class="status-heading"><h2>Routing status</h2><div class="actions" role="group" aria-label="Routing status format"><button id="status-table-toggle" type="button" aria-pressed="true">Таблица</button><button id="status-text-toggle" type="button" aria-pressed="false">Текст</button></div></div>
+<div id="route-status-table" class="routing-status"></div><pre id="route-status-text" class="routing-status-raw" hidden></pre></section></main>
 <script src="/static/app.js"></script></body></html>
