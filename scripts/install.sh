@@ -60,17 +60,28 @@ fi
 install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0750 "${INSTALL_DIR}"
 install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0750 /var/lib/web-proxy
 
-# Copy source without local environments, credentials, caches, or database files.
-tar -C "${SOURCE_DIR}" \
-    --exclude='./.git' \
-    --exclude='./.venv' \
-    --exclude='./.env' \
-    --exclude='./*.db' \
-    --exclude='./.pytest_cache' \
-    --exclude='__pycache__' \
-    --exclude='*.pyc' \
-    -cf - . | tar -C "${INSTALL_DIR}" -xf -
-chown -R "${APP_USER}:${APP_GROUP}" "${INSTALL_DIR}"
+INSTALL_DIR_REAL="$(cd -- "${INSTALL_DIR}" && pwd -P)"
+COPY_SOURCE=1
+if [[ "${SOURCE_DIR}" == "${INSTALL_DIR_REAL}" ]]; then
+    COPY_SOURCE=0
+    printf 'Source is already installed at %s; skipping copy.\n' "${INSTALL_DIR_REAL}"
+elif [[ "${SOURCE_DIR}" == "${INSTALL_DIR_REAL}/"* || "${INSTALL_DIR_REAL}" == "${SOURCE_DIR}/"* ]]; then
+    fail "Source (${SOURCE_DIR}) and install directory (${INSTALL_DIR_REAL}) overlap; copy the project to a separate directory and retry"
+fi
+
+if [[ "${COPY_SOURCE}" -eq 1 ]]; then
+    # Copy source without local environments, credentials, caches, or database files.
+    tar -C "${SOURCE_DIR}" \
+        --exclude='./.git' \
+        --exclude='./.venv' \
+        --exclude='./.env' \
+        --exclude='./*.db' \
+        --exclude='./.pytest_cache' \
+        --exclude='__pycache__' \
+        --exclude='*.pyc' \
+        -cf - . | tar -C "${INSTALL_DIR_REAL}" -xf -
+    chown -R "${APP_USER}:${APP_GROUP}" "${INSTALL_DIR_REAL}"
+fi
 
 runuser -u "${APP_USER}" -- python3 -m venv "${INSTALL_DIR}/.venv"
 runuser -u "${APP_USER}" -- "${INSTALL_DIR}/.venv/bin/python" -m pip install --upgrade pip
