@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.schemas import RouteRuleCreate
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.tables import RouteRule
 from app.services.routing import RoutingError, apply_routing, status
@@ -55,7 +56,16 @@ def apply(db: Session = Depends(get_db)):
     direct = [r.cidr for r in db.query(RouteRule).filter_by(kind="DIRECT", enabled=True).all()]
     awg = [r.cidr for r in db.query(RouteRule).filter_by(kind="AWG", enabled=True).all()]
 
-    args = ["--ru-url", "https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone"]
+    args = [
+        "--interface", settings.awg_interface,
+        "--table", settings.routing_table,
+        "--mark", settings.routing_mark,
+        "--priority", str(settings.routing_priority),
+    ]
+    if settings.ru_file:
+        args += ["--ru-file", settings.ru_file]
+    else:
+        args += ["--ru-url", settings.ru_url]
     if direct:
         args += ["--direct", *direct]
     if awg:

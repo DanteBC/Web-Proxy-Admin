@@ -1,6 +1,7 @@
 [Unit]
 Description=Web Proxy Administration API
-After=network.target 3proxy.service
+After=network.target network-online.target 3proxy.service
+Wants=network-online.target
 
 [Service]
 Type=simple

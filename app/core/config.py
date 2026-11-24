@@ -25,6 +25,11 @@ class Settings(BaseSettings):
 
     routing_script: str = "/usr/local/sbin/webproxy-routing"
     ru_url: str = "https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone"
+    ru_file: str = ""
+    awg_interface: str = "awg1"
+    routing_table: str = "100"
+    routing_mark: str = "1"
+    routing_priority: int = 100
 
 
 settings = Settings()

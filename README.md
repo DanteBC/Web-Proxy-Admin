@@ -31,7 +31,7 @@ Linux-хост с:
 - Python 3.11+;
 - systemd;
 - 3proxy;
-- AmneziaWG или совместимый WireGuard-интерфейс с именем `awg1`;
+- AmneziaWG или совместимый WireGuard-интерфейс, обычно `awg1` — фактическое имя задаётся настройкой `WEBPROXY_AWG_INTERFACE`;
 - утилитами `ip`, `ipset`, `iptables`, `systemctl`;
 - правами на применение netfilter-routing либо systemd capability;
 - доступом к `/etc/3proxy/`, `/var/log/3proxy/` и базе приложения.
@@ -84,6 +84,10 @@ WEBPROXY_PROXY_USER=3proxy
 
 WEBPROXY_ROUTING_SCRIPT=/usr/local/sbin/webproxy-routing
 WEBPROXY_RU_URL=https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone
+WEBPROXY_RU_FILE=
+WEBPROXY_AWG_INTERFACE=awg1
+WEBPROXY_ROUTING_TABLE=100
+WEBPROXY_ROUTING_MARK=1
 ```
 
 Сгенерируйте случайный ключ сессии:
@@ -239,6 +243,156 @@ sudo ip route show table 100
 sudo ip route get 1.1.1.1
 sudo ip route get 1.1.1.1 mark 1
 ```
+
+### Настройка при `Table = off` в профиле Amnezia
+
+Параметр `Table = off` отключает автоматическое управление маршрутом в конфигурации Amnezia/WireGuard, а не отключает сам интерфейс и не означает отсутствие `AllowedIPs`. Приложение и routing-helper могут продолжать использовать отдельную таблицу, но для этого маршруты нужно создавать вручную или отдельным systemd-скриптом.
+
+Сначала проверьте реальное состояние профиля и интерфейса:
+
+```bash
+sudo ip link show awg1
+sudo ip address show dev awg1
+sudo wg show awg1
+sudo wg show awg1 allowed-ips
+sudo ip route show dev awg1
+sudo ip route show table 100
+```
+
+Создайте правила и route, если профиль не создал их автоматически:
+
+```bash
+sudo ip rule add priority 100 fwmark 1 lookup 100 2>/dev/null || true
+sudo ip route replace default dev awg1 table 100
+sudo ip route flush cache
+```
+
+Скрипт проекта делает те же основные операции:
+
+```bash
+sudo python3 /opt/web-proxy/scripts/route_awg.py \
+  --interface awg1 \
+  --ru-url https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone
+```
+
+Если AWG уже был поднят утилитой Amnezia с `Table = off`, не запускайте общие `wg-quick`-команды для этого профиля. Проверьте точное имя интерфейса: старые/другие профили могут создать интерфейс не `awg1`, а `awg0`, `wg0` или другое имя. В панели укажите фактическое имя через аргумент `--interface` и замените имя в systemd unit.
+
+Не удаляйте существующий маршрут peer-сервера или маршрут к серверу AWG из основной таблицы. При типичной конфигурации `AllowedIPs = 0.0.0.0/0` интерфейс сам не должен без необходимости перехватывать весь общий routing хоста, если для него отключено создание table-правил. Однако общий `AllowedIPs` всё равно означает, какие назначения tunnel-а могут принимать peer policy и route; фактический выбор таблицы обычно выполняется вашим правилом `fwmark`.
+
+Проверьте fallback-маршрутизацию и отсутствие циклов:
+
+```bash
+sudo ip route get 1.1.1.1
+sudo ip route get 8.8.8.8 mark 1
+sudo ip route get 77.88.8.8 mark 1
+```
+
+`1.1.1.1` и `8.8.8.8` должны показывать `dev awg1 table 100` при маркировке `1`, если они принудительно не находятся в `ru-direct`. Российский адрес должен идти через обычный маршрут хоста и не иметь mark.
+
+Для запуска при поднятии/переподключении AWG создайте systemd-службу или NetworkManager/dispatcher hook после поднятия интерфейса:
+
+```ini
+[Unit]
+Description=Restore WebProxy policy routing
+After=network-online.target awg.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/webproxy-routing --interface awg1 --table 100 --mark 1 --priority 100 --ru-url https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone
+
+[Install]
+WantedBy=multi-user.target
+```
+
+После установки unit:
+
+```bash
+sudo install -m 0750 scripts/route_awg.py /usr/local/sbin/webproxy-routing
+sudo tee /etc/systemd/system/webproxy-routing.service >/dev/null <<'EOF'
+[Unit]
+Description=Restore WebProxy policy routing
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/webproxy-routing --interface awg1 --table 100 --mark 1 --priority 100 --ru-url https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable --now webproxy-routing.service
+```
+
+Unit должен стартовать после поднятия конкретного AWG-интерфейса. Добавьте зависимости вида `After=awg.service` или используйте dispatcher hook после успешного поднятия интерфейса; порядок запуска должен быть проверен командой `systemctl list-dependencies webproxy-routing.service`.
+
+Если tunnel переподключается и AWG-инсталлятор не перезапускает интерфейс, route в таблице `100` можно сохранить, но при полном пересоздании `awg1` unit/router-helper должен запустить route повторно после появления интерфейса.
+
+### `PostUp` / `PostDown` для профиля Amnezia
+
+Если Linux-клиент AmneziaWG поддерживает обычные WireGuard-style hooks, упростить lifecycle можно прямо из секции `[Interface]` профиля:
+
+```ini
+[Interface]
+Address = 10.0.0.2/32
+PrivateKey = ...
+DNS = ...
+Table = off
+
+PostUp = /usr/local/sbin/webproxy-routing --interface %i --table 100 --mark 1 --priority 100 --ru-url https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone
+PostDown = ip route flush table 100; ip rule del priority 100 fwmark 1 lookup 100 2>/dev/null || true
+```
+
+`%i` означает фактическое имя поднятого интерфейса. Не фиксируйте `awg1` в hooks, если клиент может создать другой интерфейс; скрипт и адрес route должны получать имя через `%i`.
+
+Несколько PostUp/PostDown команд разделяются точкой с запятой. Если версия клиента не выполняет `%i` или не поддерживает hooks, используйте systemd/NetworkManager hook вместо этих строк. Сами AWG-параметры профиля должны оставаться в формате вашего Amnezia-клиента, а не путаться с directive `Table`.
+
+Если клиент поддерживает две директивы `PostUp` или если AWG-клиент использует двухшаговую конфигурацию, можно разделить setup на два этапа:
+
+```ini
+PostUp = ip rule replace priority 100 fwmark 1 lookup 100; ip route replace default dev %i table 100
+PostUp = /usr/local/sbin/webproxy-routing --interface %i --table 100 --mark 1 --priority 100 --ru-file /var/lib/web-proxy/ru.zone
+```
+
+Это позволяет сначала добавить policy route, а затем загрузить ipset и iptables-цепочку. Дублированные директивы `PostUp` поддерживаются не всеми реализациями/парсерами; где это не поддерживается, объедините команды одной строкой через `;` или вызывайте route-helper из одного-единственного PostUp.
+
+PostDown должен удалять только артефакты этого проекта:
+
+```ini
+PostDown = ip route flush table 100; ip rule del priority 100 fwmark 1 lookup 100 2>/dev/null || true
+```
+
+Не выполняйте общий `iptables -F`, не удаляйте чужие fwmark-правила и не разрушайте ipset через PostDown. Оставленные ipset-наборы и iptables-цепочка не будут отправлять traffic в таблицу `100` после удаления policy route, а отдельная очистка может небезопасно повлиять на конфигурацию хоста.
+
+Перед установкой профиля проверьте права скрипта:
+
+```bash
+sudo install -m 0750 scripts/route_awg.py /usr/local/sbin/webproxy-routing
+sudo chmod 0750 /usr/local/sbin/webproxy-routing
+sudo visudo -c
+```
+
+Hook должен запускаться привилегированно пользователем системы. Не пытайтесь дать обычному пользовательскому процессу `sudo` с паролем внутри конфигурационного профиля. Лучший вариант для desktop-клиента — profile hook вызывает root-level helper через configured systemd/NetworkManager integration. На сервере скрипт устанавливают в `/usr/local/sbin` и запускают через network unit с правами root.
+
+Если профиль хранит имя интерфейса и запускается обычным Amnezia-клиентом не через systemd, первый вариант — путь к helper и hook должны соответствовать установленной Amnezia/awg реализации. Проверьте фактический синтаксис и запустите hook вручную до сохранения профиля:
+
+```bash
+sudo /usr/local/sbin/webproxy-routing --interface awg1 --table 100 --mark 1 --priority 100 --ru-url https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone
+sudo ip rule show
+sudo ip route show table 100
+sudo iptables -t mangle -n -v -L WEBPROXY_AWG
+```
+
+В результате work-flow упрощается:
+
+- профиль создаёт интерфейс;
+- `PostUp` восстанавливает/добавляет policy rule и route таблицы `100`;
+- route-helper обновляет ipset и iptables без отдельного API-приложения;
+- приложение может применять новые CIDR через тот же helper;
+- `PostDown` удаляет только routing rule/route, не затрагивая другие системные правила;
+- отдельный systemd unit нужен только как fallback для возврата маршрута после reboot или ошибки запуска профиля.
 
 Команда `ip route get ... mark 1` доступна только если утилита/ядро поддерживают опцию `mark`. Запустите альтернативу через `ip rule` и таблицу при необходимости.
 
@@ -425,7 +579,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/webproxy-routing --ru-url https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone
+ExecStart=/usr/local/sbin/webproxy-routing --interface awg1 --table 100 --mark 1 --priority 100 --ru-url https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone
 RemainAfterExit=yes
 
 [Install]
@@ -552,7 +706,7 @@ systemctl is-active 3proxy.service
 sudo ipset list ru-direct
 sudo iptables -t mangle -n -L WEBPROXY_AWG
 sudo ip rule show
-sudo ip route show table 100
+sudo ip route show table 100  # замените 100, если задана другая WEBPROXY_ROUTING_TABLE
 ```
 
 ## Подводные камни
@@ -562,7 +716,7 @@ sudo ip route show table 100
 - Для concurrent изменений используйте flock, который уже предусмотрен в routing helper.
 - Атомарная замена ipset выполняется через temporary set + `swap`.
 - При падении AWG удалите stale default route или восстановите route с новой интерфейсной конфигурацией.
-- Изменение `awg1` требует повторного создания default route в table `100`.
+- Изменение фактического имени AWG-интерфейса требует повторного создания default route в таблице `100` с актуальным значением `WEBPROXY_AWG_INTERFACE`.
 - `rp_filter=1` может ломать asymmetric routing; проверяйте значения:
 
 ```bash

@@ -63,14 +63,14 @@ def ensure_jump(table: str, hook: str, spec: list[str]) -> None:
         run("iptables", "-t", table, "-A", *spec)
 
 
-def configure_chain(proxy_uid: int | None) -> None:
+def configure_chain(proxy_uid: int | None, mark: str = MARK) -> None:
     if run("iptables", "-t", "mangle", "-n", "-L", CHAIN, check=False).returncode != 0:
         run("iptables", "-t", "mangle", "-N", CHAIN)
     run("iptables", "-t", "mangle", "-F", CHAIN)
 
     run("iptables", "-t", "mangle", "-A", CHAIN,
         "-m", "set", "--match-set", FORCE_SET, "dst",
-        "-j", "MARK", "--set-mark", MARK,
+        "-j", "MARK", "--set-mark", mark,
         "-m", "comment", "--comment", "webproxy-awg-force")
 
     run("iptables", "-t", "mangle", "-A", CHAIN,
@@ -79,7 +79,7 @@ def configure_chain(proxy_uid: int | None) -> None:
         "-m", "comment", "--comment", "webproxy-direct")
 
     run("iptables", "-t", "mangle", "-A", CHAIN,
-        "-j", "MARK", "--set-mark", MARK,
+        "-j", "MARK", "--set-mark", mark,
         "-m", "comment", "--comment", "webproxy-awg-default")
 
     if proxy_uid is not None:
@@ -88,13 +88,13 @@ def configure_chain(proxy_uid: int | None) -> None:
         ])
 
 
-def configure_policy_route(interface: str) -> None:
+def configure_policy_route(interface: str, table: str = TABLE, mark: str = MARK, priority: str = "100") -> None:
     run("ip", "link", "show", "dev", interface)
-    run("ip", "route", "replace", "default", "dev", interface, "table", TABLE)
+    run("ip", "route", "replace", "default", "dev", interface, "table", table)
 
-    existing = run("ip", "rule", "show", "priority", "100", check=False).stdout
-    if "fwmark 1 lookup 100" not in existing:
-        run("ip", "rule", "add", "priority", "100", "fwmark", MARK, "lookup", TABLE)
+    rule = run("ip", "rule", "show", "priority", priority, check=False).stdout
+    if f"fwmark {mark} lookup {table}" not in rule:
+        run("ip", "rule", "replace", "priority", priority, "fwmark", mark, "lookup", table)
 
 
 def add_networks(name: str, networks: list[str]) -> None:
@@ -120,6 +120,9 @@ def main() -> None:
     parser.add_argument("--remove-force-awg", nargs="*")
     parser.add_argument("--interface", default="awg1")
     parser.add_argument("--proxy-user", default="3proxy")
+    parser.add_argument("--table", default=TABLE)
+    parser.add_argument("--mark", default=MARK)
+    parser.add_argument("--priority", default="100")
     args = parser.parse_args()
 
     require_root()
@@ -153,8 +156,8 @@ def main() -> None:
         except KeyError:
             proxy_uid = None
 
-        configure_chain(proxy_uid)
-        configure_policy_route(args.interface)
+        configure_chain(proxy_uid, args.mark)
+        configure_policy_route(args.interface, args.table, args.mark, args.priority)
 
 
 if __name__ == "__main__":

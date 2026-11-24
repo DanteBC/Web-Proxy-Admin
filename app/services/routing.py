@@ -8,7 +8,7 @@ class RoutingError(RuntimeError):
 
 
 def apply_routing(extra_args: list[str] | None = None) -> str:
-    command = ["sudo", "-n", "python3", settings.routing_script]
+    command = ["sudo", "-n", settings.routing_script]
     command.extend(extra_args or ["--ru-url", settings.ru_url])
 
     result = subprocess.run(
@@ -28,7 +28,7 @@ def status() -> dict:
         "ipsets": ["ipset", "list"],
         "iptables": ["iptables", "-t", "mangle", "-n", "-v", "-L", "WEBPROXY_AWG"],
         "rules": ["ip", "rule", "show"],
-        "routes": ["ip", "route", "show", "table", "100"],
+        "routes": ["ip", "route", "show", "table", settings.routing_table],
     }
 
     output = {}
