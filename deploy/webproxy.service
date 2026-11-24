@@ -9,7 +9,8 @@ User=webproxy
 Group=webproxy
 WorkingDirectory=/opt/web-proxy
 EnvironmentFile=/etc/web-proxy.env
-ExecStart=/opt/web-proxy/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Environment=WEBPROXY_WEB_HOST=127.0.0.1
+ExecStart=/opt/web-proxy/.venv/bin/uvicorn app.main:app --host ${WEBPROXY_WEB_HOST} --port 8000
 Restart=on-failure
 PrivateTmp=true
 ProtectSystem=strict

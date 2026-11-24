@@ -61,12 +61,12 @@ python3 -m venv .venv
 . .venv/bin/activate
 pip install -e '.[dev]'
 cp .env.example .env
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+uvicorn app.main:app --host "${WEBPROXY_WEB_HOST:-127.0.0.1}" --port 8000 --reload
 ```
 
 Установка через `.[dev]` необязательна для production: используйте `pip install -e .` или пакетный способ развёртывания.
 
-Приложение доступно по адресу `http://127.0.0.1:8000/login`.
+По умолчанию приложение доступно локально по адресу `http://127.0.0.1:8000/login`. Чтобы запустить dev-сервер на другом IP, задайте `WEBPROXY_WEB_HOST` в shell перед запуском. Для IPv6-адреса используйте, например, `--host ::1`; в URL IPv6-адрес указывается в квадратных скобках.
 
 Основные переменные окружения:
 
@@ -75,6 +75,7 @@ WEBPROXY_DATABASE_URL=sqlite:///./webproxy.db
 WEBPROXY_SESSION_SECRET=случайная-длинная-строка
 WEBPROXY_ADMIN_LOGIN=admin
 WEBPROXY_ADMIN_PASSWORD=strong-password
+WEBPROXY_WEB_HOST=127.0.0.1
 
 WEBPROXY_PROXY_CONFIG=/etc/3proxy/3proxy.cfg
 WEBPROXY_PROXY_USERS_FILE=/var/lib/web-proxy/users
@@ -614,6 +615,7 @@ sudo ./scripts/install.sh
 
 ```bash
 sudo env \
+  WEBPROXY_WEB_HOST=192.0.2.10 \
   WEBPROXY_AWG_INTERFACE=awg1 \
   WEBPROXY_ROUTING_TABLE=100 \
   WEBPROXY_ROUTING_MARK=1 \
@@ -623,6 +625,22 @@ sudo env \
 ```
 
 При повторном запуске существующий `/etc/web-proxy.env` сохраняется, а значения AWG-интерфейса, таблицы, mark, priority и URL для генерируемого sudoers берутся из него. Меняйте их в этом файле и затем повторно запускайте установщик, чтобы обновить sudoers. Установщик не удаляет базу данных и не изменяет существующую конфигурацию 3proxy или AmneziaWG.
+
+`WEBPROXY_WEB_HOST` задаёт IP-адрес, на котором uvicorn принимает подключения. Допустим IPv4 или IPv6, назначенный этому серверу. Значение по умолчанию — `127.0.0.1`, то есть доступ только с самого хоста. Например, чтобы слушать на конкретном LAN-IP:
+
+```dotenv
+WEBPROXY_WEB_HOST=192.168.1.10
+```
+
+Для прослушивания на всех IPv4-интерфейсах можно указать `0.0.0.0`, но тогда обязательно ограничьте доступ firewall-ом или используйте reverse proxy с TLS и аутентификацией. Не публикуйте административную панель в открытый интернет. После изменения настройки перезапустите unit:
+
+```bash
+sudo systemctl restart webproxy.service
+sudo systemctl status webproxy.service --no-pager
+sudo ss -lntp | grep ':8000'
+```
+
+Для IPv6 укажите адрес, например `2001:db8::10`; URL в браузере будет иметь вид `http://[2001:db8::10]:8000/login`.
 
 После установки проверьте состояние:
 

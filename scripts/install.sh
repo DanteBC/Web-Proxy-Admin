@@ -95,6 +95,7 @@ read_env_value() {
 }
 
 if [[ -e "${ENV_FILE}" ]]; then
+    WEB_HOST="$(read_env_value WEBPROXY_WEB_HOST "${WEBPROXY_WEB_HOST:-127.0.0.1}")"
     AWG_INTERFACE="$(read_env_value WEBPROXY_AWG_INTERFACE awg1)"
     ROUTING_TABLE="$(read_env_value WEBPROXY_ROUTING_TABLE 100)"
     ROUTING_MARK="$(read_env_value WEBPROXY_ROUTING_MARK 1)"
@@ -103,6 +104,7 @@ if [[ -e "${ENV_FILE}" ]]; then
     PROXY_USER="$(read_env_value WEBPROXY_PROXY_USER 3proxy)"
     PROXY_SERVICE="$(read_env_value WEBPROXY_PROXY_SERVICE 3proxy.service)"
 else
+    WEB_HOST="${WEBPROXY_WEB_HOST:-127.0.0.1}"
     AWG_INTERFACE="${WEBPROXY_AWG_INTERFACE:-awg1}"
     ROUTING_TABLE="${WEBPROXY_ROUTING_TABLE:-100}"
     ROUTING_MARK="${WEBPROXY_ROUTING_MARK:-1}"
@@ -110,6 +112,10 @@ else
     RU_URL="${WEBPROXY_RU_URL:-https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone}"
     PROXY_USER="${WEBPROXY_PROXY_USER:-3proxy}"
     PROXY_SERVICE="${WEBPROXY_PROXY_SERVICE:-3proxy.service}"
+fi
+
+if ! python3 -c 'import ipaddress, sys; ipaddress.ip_address(sys.argv[1])' "${WEB_HOST}" 2>/dev/null; then
+    fail "WEBPROXY_WEB_HOST must be a valid IPv4 or IPv6 address"
 fi
 
 [[ "${AWG_INTERFACE}" =~ ^[a-zA-Z0-9_.-]+$ ]] || fail "Invalid AWG interface name"
@@ -135,6 +141,7 @@ WEBPROXY_DATABASE_URL=sqlite:////var/lib/web-proxy/webproxy.db
 WEBPROXY_SESSION_SECRET=${SESSION_SECRET}
 WEBPROXY_ADMIN_LOGIN=${ADMIN_LOGIN}
 WEBPROXY_ADMIN_PASSWORD=${ADMIN_PASSWORD}
+WEBPROXY_WEB_HOST=${WEB_HOST}
 WEBPROXY_PROXY_CONFIG=/etc/3proxy/3proxy.cfg
 WEBPROXY_PROXY_USERS_FILE=/var/lib/web-proxy/users
 WEBPROXY_PROXY_LOG_FILE=/var/log/3proxy/3proxy.log
@@ -151,6 +158,11 @@ EOF
     CREATED_CREDENTIALS=1
 else
     CREATED_CREDENTIALS=0
+    if grep -q '^WEBPROXY_WEB_HOST=' "${ENV_FILE}"; then
+        sed -i "s|^WEBPROXY_WEB_HOST=.*|WEBPROXY_WEB_HOST=${WEB_HOST}|" "${ENV_FILE}"
+    else
+        printf '\nWEBPROXY_WEB_HOST=%s\n' "${WEB_HOST}" >>"${ENV_FILE}"
+    fi
     chown root:root "${ENV_FILE}"
     chmod 0600 "${ENV_FILE}"
     printf 'Keeping existing environment file: %s\n' "${ENV_FILE}"
@@ -201,7 +213,11 @@ systemctl daemon-reload
 systemctl enable --now "${SERVICE_NAME}"
 
 printf '\n%s installed and started.\n' "${APP_NAME}"
-printf 'Dashboard: http://127.0.0.1:8000/login\n'
+if [[ "${WEB_HOST}" == *:* ]]; then
+    printf 'Dashboard: http://[%s]:8000/login\n' "${WEB_HOST}"
+else
+    printf 'Dashboard: http://%s:8000/login\n' "${WEB_HOST}"
+fi
 printf 'Environment: %s (mode 0600)\n' "${ENV_FILE}"
 printf 'Routing helper: %s\n' "${ROUTING_SCRIPT}"
 
