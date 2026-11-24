@@ -4,6 +4,7 @@ set -Eeuo pipefail
 APP_NAME="web-proxy"
 APP_USER="webproxy"
 APP_GROUP="webproxy"
+SHARED_LOG_GROUP="webproxy-3proxy"
 INSTALL_DIR="/opt/web-proxy"
 ENV_FILE="/etc/web-proxy.env"
 SERVICE_NAME="webproxy.service"
@@ -114,6 +115,8 @@ if [[ -e "${ENV_FILE}" ]]; then
     RU_URL="$(read_env_value WEBPROXY_RU_URL https://www.ipdeny.com/ipblocks/data/aggregated/ru-aggregated.zone)"
     PROXY_USER="$(read_env_value WEBPROXY_PROXY_USER 3proxy)"
     PROXY_SERVICE="$(read_env_value WEBPROXY_PROXY_SERVICE 3proxy.service)"
+    PROXY_USERS_FILE="$(read_env_value WEBPROXY_PROXY_USERS_FILE /var/lib/web-proxy/users)"
+    PROXY_LOG_FILE="$(read_env_value WEBPROXY_PROXY_LOG_FILE /var/log/3proxy/3proxy.log)"
 else
     WEB_HOST="${WEBPROXY_WEB_HOST:-127.0.0.1}"
     AWG_INTERFACE="${WEBPROXY_AWG_INTERFACE:-awg1}"
@@ -123,6 +126,8 @@ else
     RU_URL="${WEBPROXY_RU_URL:-https://www.ipdeny.com/ipblocks/data/aggregated/ru-aggregated.zone}"
     PROXY_USER="${WEBPROXY_PROXY_USER:-3proxy}"
     PROXY_SERVICE="${WEBPROXY_PROXY_SERVICE:-3proxy.service}"
+    PROXY_USERS_FILE="/var/lib/web-proxy/users"
+    PROXY_LOG_FILE="/var/log/3proxy/3proxy.log"
 fi
 
 if ! python3 -c 'import ipaddress, sys; ipaddress.ip_address(sys.argv[1])' "${WEB_HOST}" 2>/dev/null; then
@@ -135,8 +140,34 @@ fi
 [[ "${ROUTING_MARK}" =~ ^(0[xX][[:xdigit:]]+|[0-9]+)(/(0[xX][[:xdigit:]]+|[0-9]+))?$ ]] \
     || fail "Invalid routing mark"
 [[ "${RU_URL}" =~ ^https://[a-zA-Z0-9._/-]+$ ]] || fail "RU list URL must be a plain HTTPS URL"
-[[ "${PROXY_USER}" =~ ^[a-zA-Z_][a-zA-Z0-9_.-]*[$]?$ ]] || fail "Invalid 3proxy system user"
+[[ "${PROXY_USER}" =~ ^[a-zA-Z_][a-zA-Z0-9_.-]*$ ]] || fail "Invalid 3proxy system user"
 [[ "${PROXY_SERVICE}" =~ ^[a-zA-Z0-9_.@:-]+$ ]] || fail "Invalid 3proxy systemd service name"
+[[ "${PROXY_USERS_FILE}" == /var/lib/web-proxy/* ]] \
+    || fail "WEBPROXY_PROXY_USERS_FILE must be inside /var/lib/web-proxy so the app can safely manage it"
+[[ "${PROXY_LOG_FILE}" == /var/log/3proxy/* ]] \
+    || fail "WEBPROXY_PROXY_LOG_FILE must be inside /var/log/3proxy so file permissions remain scoped"
+
+if [[ "${PROXY_USER}" == "${APP_USER}" ]]; then
+    fail "WEBPROXY_PROXY_USER must differ from the application account '${APP_USER}'"
+fi
+
+if ! id "${PROXY_USER}" >/dev/null 2>&1; then
+    if ! getent group "${PROXY_USER}" >/dev/null; then
+        groupadd --system "${PROXY_USER}"
+    fi
+    useradd --system --gid "${PROXY_USER}" --home-dir /var/lib/3proxy \
+        --no-create-home --shell /usr/sbin/nologin "${PROXY_USER}"
+fi
+
+PROXY_GROUP="$(id -gn "${PROXY_USER}")"
+getent group "${PROXY_GROUP}" >/dev/null || fail "Primary group '${PROXY_GROUP}' for ${PROXY_USER} does not exist"
+if ! getent group "${SHARED_LOG_GROUP}" >/dev/null; then
+    groupadd --system "${SHARED_LOG_GROUP}"
+fi
+install -d -o "${PROXY_USER}" -g "${PROXY_GROUP}" -m 0750 /var/lib/3proxy
+
+usermod -a -G "${APP_GROUP},${SHARED_LOG_GROUP}" "${PROXY_USER}"
+usermod -a -G "${SHARED_LOG_GROUP}" "${APP_USER}"
 
 if [[ ! -e "${ENV_FILE}" ]]; then
     ADMIN_LOGIN="${WEBPROXY_ADMIN_LOGIN:-admin}"
@@ -154,8 +185,8 @@ WEBPROXY_ADMIN_LOGIN=${ADMIN_LOGIN}
 WEBPROXY_ADMIN_PASSWORD=${ADMIN_PASSWORD}
 WEBPROXY_WEB_HOST=${WEB_HOST}
 WEBPROXY_PROXY_CONFIG=/etc/3proxy/3proxy.cfg
-WEBPROXY_PROXY_USERS_FILE=/var/lib/web-proxy/users
-WEBPROXY_PROXY_LOG_FILE=/var/log/3proxy/3proxy.log
+WEBPROXY_PROXY_USERS_FILE=${PROXY_USERS_FILE}
+WEBPROXY_PROXY_LOG_FILE=${PROXY_LOG_FILE}
 WEBPROXY_PROXY_SERVICE=${PROXY_SERVICE}
 WEBPROXY_PROXY_USER=${PROXY_USER}
 WEBPROXY_ROUTING_SCRIPT=${ROUTING_SCRIPT}
@@ -179,30 +210,44 @@ else
     printf 'Keeping existing environment file: %s\n' "${ENV_FILE}"
 fi
 
-if id "${PROXY_USER}" >/dev/null 2>&1; then
-    if ! id -nG "${PROXY_USER}" | tr ' ' '\n' | grep -Fxq "${APP_GROUP}"; then
-        usermod -a -G "${APP_GROUP}" "${PROXY_USER}"
-        PROXY_GROUP_UPDATED=1
-    else
-        PROXY_GROUP_UPDATED=0
-    fi
+PROXY_USERS_DIR="$(dirname -- "${PROXY_USERS_FILE}")"
+PROXY_LOG_DIR="$(dirname -- "${PROXY_LOG_FILE}")"
+install -d -o "${APP_USER}" -g "${APP_GROUP}" -m 0750 "${PROXY_USERS_DIR}"
+if [[ ! -e "${PROXY_USERS_FILE}" ]]; then
+    install -o "${APP_USER}" -g "${APP_GROUP}" -m 0640 /dev/null "${PROXY_USERS_FILE}"
 else
-    PROXY_GROUP_UPDATED=0
-    printf 'WARNING: system user %s does not exist; verify 3proxy can read %s.\n' \
-        "${PROXY_USER}" "/var/lib/web-proxy/users" >&2
+    chown "${APP_USER}:${APP_GROUP}" "${PROXY_USERS_FILE}"
+    chmod 0640 "${PROXY_USERS_FILE}"
 fi
 
-if id "${PROXY_USER}" >/dev/null 2>&1; then
-    PROXY_PRIMARY_GROUP="$(id -gn "${PROXY_USER}")"
-    if [[ "${PROXY_PRIMARY_GROUP}" != "${APP_GROUP}" ]]; then
-        usermod -a -G "${PROXY_PRIMARY_GROUP}" "${APP_USER}"
-        install -d -o root -g root -m 0755 "/etc/systemd/system/${SERVICE_NAME}.d"
-        cat >"/etc/systemd/system/${SERVICE_NAME}.d/proxy-group.conf" <<EOF
+install -d -o "${PROXY_USER}" -g "${SHARED_LOG_GROUP}" -m 0750 "${PROXY_LOG_DIR}"
+if [[ ! -e "${PROXY_LOG_FILE}" ]]; then
+    install -o "${PROXY_USER}" -g "${SHARED_LOG_GROUP}" -m 0640 /dev/null "${PROXY_LOG_FILE}"
+else
+    chown "${PROXY_USER}:${SHARED_LOG_GROUP}" "${PROXY_LOG_FILE}"
+    chmod 0640 "${PROXY_LOG_FILE}"
+fi
+
+install -d -o root -g root -m 0755 "/etc/systemd/system/${SERVICE_NAME}.d"
+cat >"/etc/systemd/system/${SERVICE_NAME}.d/proxy-group.conf" <<EOF
 [Service]
-SupplementaryGroups=${PROXY_PRIMARY_GROUP}
+SupplementaryGroups=${SHARED_LOG_GROUP}
 EOF
-        chmod 0644 "/etc/systemd/system/${SERVICE_NAME}.d/proxy-group.conf"
-    fi
+chmod 0644 "/etc/systemd/system/${SERVICE_NAME}.d/proxy-group.conf"
+
+if systemctl cat "${PROXY_SERVICE}" >/dev/null 2>&1; then
+    PROXY_UNIT_DROPIN_DIR="/etc/systemd/system/${PROXY_SERVICE}.d"
+    install -d -o root -g root -m 0755 "${PROXY_UNIT_DROPIN_DIR}"
+    cat >"${PROXY_UNIT_DROPIN_DIR}/webproxy-users.conf" <<EOF
+[Service]
+SupplementaryGroups=${APP_GROUP} ${SHARED_LOG_GROUP}
+EOF
+    chmod 0644 "${PROXY_UNIT_DROPIN_DIR}/webproxy-users.conf"
+    PROXY_UNIT_FOUND=1
+else
+    PROXY_UNIT_FOUND=0
+    printf 'WARNING: systemd unit %s was not found; configure its service process to read group %s.\n' \
+        "${PROXY_SERVICE}" "${APP_GROUP}" >&2
 fi
 
 SUDOERS_TMP="$(mktemp)"
@@ -221,7 +266,12 @@ visudo -c
 
 install -o root -g root -m 0644 "${INSTALL_DIR}/deploy/${SERVICE_NAME}" "/etc/systemd/system/${SERVICE_NAME}"
 systemctl daemon-reload
-systemctl enable --now "${SERVICE_NAME}"
+systemctl enable "${SERVICE_NAME}"
+if systemctl is-active --quiet "${SERVICE_NAME}"; then
+    systemctl restart "${SERVICE_NAME}"
+else
+    systemctl start "${SERVICE_NAME}"
+fi
 
 printf '\n%s installed and started.\n' "${APP_NAME}"
 if [[ "${WEB_HOST}" == *:* ]]; then
@@ -238,16 +288,16 @@ if [[ "${CREATED_CREDENTIALS}" -eq 1 ]]; then
     printf 'Store this password securely; it is not shown again.\n'
 fi
 
+if [[ "${PROXY_UNIT_FOUND}" -eq 1 ]]; then
+    printf '\nRestart %s during a maintenance window to apply its new supplementary groups %s and %s.\n' \
+        "${PROXY_SERVICE}" "${APP_GROUP}" "${SHARED_LOG_GROUP}"
+fi
+
 cat <<EOF
 
 AmneziaWG profile hook for [Interface] (if this client supports PostUp/PostDown):
 PostUp = ${ROUTING_SCRIPT} --interface %i --table ${ROUTING_TABLE} --mark ${ROUTING_MARK} --priority ${ROUTING_PRIORITY} --ru-url ${RU_URL}
 PostDown = ip route del default dev %i table ${ROUTING_TABLE}; ip rule del priority ${ROUTING_PRIORITY} fwmark ${ROUTING_MARK} lookup ${ROUTING_TABLE} 2>/dev/null || true
 
-This installer does not install or modify 3proxy/AmneziaWG profiles. Configure 3proxy's users-file and log path to match ${ENV_FILE}, then reload 3proxy. Apply the AWG hook only after verifying that your Amnezia client supports these directives and expands %i.
+This installer does not install or rewrite 3proxy/AmneziaWG configuration. Configure 3proxy to read users from ${PROXY_USERS_FILE} and write logs to ${PROXY_LOG_FILE}. Apply the AWG hook only after verifying that your Amnezia client supports these directives and expands %i.
 EOF
-
-if [[ "${PROXY_GROUP_UPDATED}" -eq 1 ]]; then
-    printf '\nRestart %s once during a maintenance window so it receives the added %s group membership.\n' \
-        "${PROXY_SERVICE}" "${APP_GROUP}"
-fi

@@ -601,7 +601,7 @@ sudo systemctl enable --now webproxy-routing.service
 
 ## Установка скриптом
 
-Установщик предназначен для Debian/Ubuntu с Python 3.11+ и запускается от root. Он устанавливает системные утилиты и Python, копирует приложение в `/opt/web-proxy`, создаёт пользователя `webproxy` и venv, сохраняет настройки в `/etc/web-proxy.env`, устанавливает routing helper и минимальные sudoers-правила для helper и reload 3proxy, затем включает `webproxy.service`.
+Установщик предназначен для Debian/Ubuntu с Python 3.11+ и запускается от root. Он устанавливает системные утилиты и Python, копирует приложение в `/opt/web-proxy`, создаёт системные аккаунты `webproxy` и пользователя из `WEBPROXY_PROXY_USER` (по умолчанию `3proxy`) при отсутствии, настраивает группы и права каталогов/логов/users-файла, сохраняет настройки в `/etc/web-proxy.env`, устанавливает routing helper и минимальные sudoers-правила для helper и reload 3proxy, затем включает `webproxy.service`.
 
 Из корня проекта:
 
@@ -661,15 +661,35 @@ PostDown = ip route del default dev %i table 100; ip rule del priority 100 fwmar
 
 Если используются другие значения, подставьте их из `/etc/web-proxy.env`. Проверьте поддержку `PostUp`, `PostDown` и `%i` именно вашей версией Amnezia-клиента. Запустите helper вручную после поднятия интерфейса и проверьте `ip rule show`, `ip route show table 100` и цепочку `WEBPROXY_AWG` до включения hooks.
 
-Скрипт не переписывает `/etc/3proxy/3proxy.cfg`. Убедитесь, что директива `users` указывает на значение `WEBPROXY_PROXY_USERS_FILE` (по умолчанию после установки — `/var/lib/web-proxy/users`). Не делайте весь `/etc/3proxy` доступным на запись пользователю панели.
+Скрипт не переписывает `/etc/3proxy/3proxy.cfg`. Убедитесь, что директива `users` указывает на значение `WEBPROXY_PROXY_USERS_FILE` (по умолчанию после установки — `/var/lib/web-proxy/users`), а директива `log` — на `WEBPROXY_PROXY_LOG_FILE` (по умолчанию `/var/log/3proxy/3proxy.log`).
+
+Установщик даёт доступ по минимуму:
+
+- `/opt/web-proxy` и `/var/lib/web-proxy` принадлежат `webproxy:webproxy`; закрытый users-файл имеет режим `0640`;
+- процесс 3proxy получает дополнительную группу `webproxy` для чтения users-файла;
+- для логов создаётся отдельная группа `webproxy-3proxy`: 3proxy владеет лог-файлом, а панель получает только чтение через эту группу;
+- для службы 3proxy создаётся systemd drop-in с `SupplementaryGroups=webproxy webproxy-3proxy`; для панели — с `SupplementaryGroups=webproxy-3proxy`;
+- создаются только указанные файлы и выделенные каталоги, права на весь `/etc/3proxy` не расширяются.
+
+Если установщик создал аккаунт 3proxy, он не устанавливает сам бинарник или unit. Если systemd unit 3proxy отсутствует, установщик сообщает предупреждение; настройте group access для фактической службы вручную. После установки перезапустите `WEBPROXY_PROXY_SERVICE`, чтобы применились supplementary groups, и проверьте чтение users-файла и логов от соответствующих пользователей. Путь users-файла должен находиться внутри `/var/lib/web-proxy`, а путь лог-файла — внутри `/var/log/3proxy`; иначе установщик остановится, чтобы не менять права на общие системные каталоги.
 
 ## Ручная установка production-приложения
 
-Создайте системного пользователя:
+Создайте системные группы и аккаунты приложения и 3proxy, если они ещё не созданы:
 
 ```bash
-sudo useradd --system --home /opt/web-proxy --shell /usr/sbin/nologin webproxy
+getent group webproxy >/dev/null || sudo groupadd --system webproxy
+getent group webproxy-3proxy >/dev/null || sudo groupadd --system webproxy-3proxy
+id -u webproxy >/dev/null 2>&1 || sudo useradd --system --gid webproxy --home /opt/web-proxy --shell /usr/sbin/nologin webproxy
+getent group 3proxy >/dev/null || sudo groupadd --system 3proxy
+id -u 3proxy >/dev/null 2>&1 || sudo useradd --system --gid 3proxy --home /var/lib/3proxy --no-create-home --shell /usr/sbin/nologin 3proxy
 sudo install -d -m 0750 -o webproxy -g webproxy /var/lib/web-proxy
+sudo install -d -m 0750 -o 3proxy -g 3proxy /var/lib/3proxy
+sudo install -d -m 0750 -o 3proxy -g webproxy-3proxy /var/log/3proxy
+sudo install -o webproxy -g webproxy -m 0640 /dev/null /var/lib/web-proxy/users
+sudo install -o 3proxy -g webproxy-3proxy -m 0640 /dev/null /var/log/3proxy/3proxy.log
+sudo usermod -a -G webproxy,webproxy-3proxy 3proxy
+sudo usermod -a -G webproxy-3proxy webproxy
 sudo install -d -m 0755 /opt/web-proxy
 ```
 
@@ -696,6 +716,28 @@ sudo visudo -c
 sudo install -m 0644 deploy/webproxy.service /etc/systemd/system/webproxy.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now webproxy.service
+```
+
+Добавьте supplementary groups в оба systemd unit (сохраните и объедините их с уже существующими drop-in настройками):
+
+```ini
+# /etc/systemd/system/webproxy.service.d/proxy-group.conf
+[Service]
+SupplementaryGroups=webproxy-3proxy
+```
+
+```ini
+# /etc/systemd/system/3proxy.service.d/webproxy-users.conf
+[Service]
+SupplementaryGroups=webproxy webproxy-3proxy
+```
+
+Затем:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart 3proxy.service
+sudo systemctl restart webproxy.service
 ```
 
 Рекомендуется использовать reverse proxy с TLS:
