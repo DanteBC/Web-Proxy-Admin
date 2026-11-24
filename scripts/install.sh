@@ -140,7 +140,7 @@ fi
 [[ "${ROUTING_MARK}" =~ ^(0[xX][[:xdigit:]]+|[0-9]+)(/(0[xX][[:xdigit:]]+|[0-9]+))?$ ]] \
     || fail "Invalid routing mark"
 [[ "${RU_URL}" =~ ^https://[a-zA-Z0-9._/-]+$ ]] || fail "RU list URL must be a plain HTTPS URL"
-[[ "${PROXY_USER}" =~ ^[a-zA-Z_][a-zA-Z0-9_.-]*$ ]] || fail "Invalid 3proxy system user"
+[[ "${PROXY_USER}" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$ ]] || fail "Invalid 3proxy system user"
 [[ "${PROXY_SERVICE}" =~ ^[a-zA-Z0-9_.@:-]+$ ]] || fail "Invalid 3proxy systemd service name"
 [[ "${PROXY_USERS_FILE}" == /var/lib/web-proxy/* ]] \
     || fail "WEBPROXY_PROXY_USERS_FILE must be inside /var/lib/web-proxy so the app can safely manage it"
