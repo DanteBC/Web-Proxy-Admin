@@ -100,7 +100,7 @@ if [[ -e "${ENV_FILE}" ]]; then
     ROUTING_TABLE="$(read_env_value WEBPROXY_ROUTING_TABLE 100)"
     ROUTING_MARK="$(read_env_value WEBPROXY_ROUTING_MARK 1)"
     ROUTING_PRIORITY="$(read_env_value WEBPROXY_ROUTING_PRIORITY 100)"
-    RU_URL="$(read_env_value WEBPROXY_RU_URL https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone)"
+    RU_URL="$(read_env_value WEBPROXY_RU_URL https://www.ipdeny.com/ipblocks/data/aggregated/ru-aggregated.zone)"
     PROXY_USER="$(read_env_value WEBPROXY_PROXY_USER 3proxy)"
     PROXY_SERVICE="$(read_env_value WEBPROXY_PROXY_SERVICE 3proxy.service)"
 else
@@ -109,7 +109,7 @@ else
     ROUTING_TABLE="${WEBPROXY_ROUTING_TABLE:-100}"
     ROUTING_MARK="${WEBPROXY_ROUTING_MARK:-1}"
     ROUTING_PRIORITY="${WEBPROXY_ROUTING_PRIORITY:-100}"
-    RU_URL="${WEBPROXY_RU_URL:-https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone}"
+    RU_URL="${WEBPROXY_RU_URL:-https://www.ipdeny.com/ipblocks/data/aggregated/ru-aggregated.zone}"
     PROXY_USER="${WEBPROXY_PROXY_USER:-3proxy}"
     PROXY_SERVICE="${WEBPROXY_PROXY_SERVICE:-3proxy.service}"
 fi
