@@ -227,6 +227,9 @@ else
     chown "${PROXY_USER}:${SHARED_LOG_GROUP}" "${PROXY_LOG_FILE}"
     chmod 0640 "${PROXY_LOG_FILE}"
 fi
+find "${PROXY_LOG_DIR}" -maxdepth 1 -type f -name "$(basename -- "${PROXY_LOG_FILE}")*" \
+    -exec chown "${PROXY_USER}:${SHARED_LOG_GROUP}" {} + \
+    -exec chmod 0640 {} +
 
 install -d -o root -g root -m 0755 "/etc/systemd/system/${SERVICE_NAME}.d"
 cat >"/etc/systemd/system/${SERVICE_NAME}.d/proxy-group.conf" <<EOF
@@ -298,7 +301,7 @@ cat <<EOF
 
 AmneziaWG profile hook for [Interface] (if this client supports PostUp/PostDown):
 PostUp = ${ROUTING_SCRIPT} --interface %i --table ${ROUTING_TABLE} --mark ${ROUTING_MARK} --priority ${ROUTING_PRIORITY} --ru-url ${RU_URL}
-PostDown = ip route del default dev %i table ${ROUTING_TABLE}; ip rule del priority ${ROUTING_PRIORITY} fwmark ${ROUTING_MARK} lookup ${ROUTING_TABLE} 2>/dev/null || true
+PostDown = iptables -t nat -D POSTROUTING -o %i -m mark --mark ${ROUTING_MARK} -m comment --comment webproxy-awg-snat -j MASQUERADE 2>/dev/null || true; ip route del default dev %i table ${ROUTING_TABLE} 2>/dev/null || true; ip rule del priority ${ROUTING_PRIORITY} fwmark ${ROUTING_MARK} lookup ${ROUTING_TABLE} 2>/dev/null || true
 
 This installer does not install or rewrite 3proxy/AmneziaWG configuration. Configure 3proxy to read users from ${PROXY_USERS_FILE} and write logs to ${PROXY_LOG_FILE}. Apply the AWG hook only after verifying that your Amnezia client supports these directives and expands %i.
 EOF

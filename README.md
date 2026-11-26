@@ -10,9 +10,11 @@
         v
  цепочка WEBPROXY_AWG
         |
-        +-- dst в awg-force -> MARK 1 -> таблица 100 -> awg1
+        +-- established/related -> restore CONNMARK -> RETURN
+        +-- новые соединения:
+        +-- dst в awg-force -> MARK 1 + SNAT -> таблица 100 -> awg1
         +-- dst в ru-direct  -> RETURN (обычная маршрутизация хоста)
-        +-- всё остальное    -> MARK 1 -> таблица 100 -> awg1
+        +-- всё остальное    -> MARK 1 + save CONNMARK + SNAT -> таблица 100 -> awg1
 ```
 
 ## Состав
@@ -350,7 +352,7 @@ DNS = ...
 Table = off
 
 PostUp = /usr/local/sbin/webproxy-routing --interface %i --table 100 --mark 1 --priority 100 --ru-url https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone
-PostDown = ip route del default dev %i table 100 2>/dev/null || true; ip rule del priority 100 fwmark 1 lookup 100 2>/dev/null || true
+PostDown = iptables -t nat -D POSTROUTING -o %i -m mark --mark 1 -m comment --comment webproxy-awg-snat -j MASQUERADE 2>/dev/null || true; ip route del default dev %i table 100 2>/dev/null || true; ip rule del priority 100 fwmark 1 lookup 100 2>/dev/null || true
 ```
 
 `%i` означает фактическое имя поднятого интерфейса. Не фиксируйте `awg1` в hooks, если клиент может создать другой интерфейс; скрипт и адрес route должны получать имя через `%i`.
@@ -372,10 +374,10 @@ sudo /usr/local/sbin/webproxy-routing \
 PostDown должен удалять только артефакты этого проекта:
 
 ```ini
-PostDown = ip route del default dev %i table 100 2>/dev/null || true; ip rule del priority 100 fwmark 1 lookup 100 2>/dev/null || true
+PostDown = iptables -t nat -D POSTROUTING -o %i -m mark --mark 1 -m comment --comment webproxy-awg-snat -j MASQUERADE 2>/dev/null || true; ip route del default dev %i table 100 2>/dev/null || true; ip rule del priority 100 fwmark 1 lookup 100 2>/dev/null || true
 ```
 
-Не выполняйте общий `iptables -F`, не удаляйте чужие fwmark-правила и не разрушайте ipset через PostDown. Оставленные ipset-наборы и iptables-цепочка не будут отправлять traffic в таблицу `100` после удаления policy route, а отдельная очистка может небезопасно повлиять на конфигурацию хоста.
+Не выполняйте общий `iptables -F`, не удаляйте чужие fwmark-правила и не разрушайте ipset через PostDown. Правило `MASQUERADE` удаляется только по интерфейсу, mark и уникальному комментарию helper-а; оставленная mangle-цепочка не будет отправлять traffic в таблицу `100` после удаления policy route.
 
 Перед установкой профиля проверьте права скрипта:
 
@@ -496,12 +498,16 @@ sudo ip rule show
 sudo ip route show table 100
 ```
 
-Скрипт создаёт цепочку `WEBPROXY_AWG` приблизительно в таком виде:
+Скрипт создаёт цепочку `WEBPROXY_AWG`: для новых исходящих соединений `awg-force` получает mark, `ru-direct` остаётся без mark, а остальные назначения получают mark и сохраняют его в conntrack. Для `ESTABLISHED,RELATED` mark восстанавливается из conntrack, после чего пакет возвращается из цепочки. Это не перенаправляет ответы 3proxy входящим клиентам в AWG.
+
+Для помеченных пакетов, выходящих через AWG, helper добавляет отдельное правило `MASQUERADE` в `nat/POSTROUTING`. Mark в `OUTPUT` выставляется после первоначального выбора исходного адреса, поэтому без SNAT пакет может уйти в туннель с адресом основного интерфейса и быть отброшен peer-ом. NAT ограничен одновременно интерфейсом AWG и mark `WEBPROXY_ROUTING_MARK`; трафик `ru-direct` не меняется.
 
 ```text
--j MARK --set-mark 1    для awg-force
--j RETURN               для ru-direct
--j MARK --set-mark 1    для всего остального
+ESTABLISHED,RELATED -> CONNMARK --restore-mark -> RETURN
+NEW dst в awg-force  -> MARK 1 -> CONNMARK --save-mark -> RETURN
+NEW dst в ru-direct  -> RETURN
+NEW прочие назначения -> MARK 1 -> CONNMARK --save-mark
+nat POSTROUTING -o awg1 -m mark --mark 1 -> MASQUERADE
 ```
 
 Затем цепочка вызывается из `OUTPUT` для UID пользователя 3proxy:
@@ -527,23 +533,53 @@ sudo iptables -t mangle -N WEBPROXY_AWG 2>/dev/null || true
 sudo iptables -t mangle -F WEBPROXY_AWG
 
 sudo iptables -t mangle -A WEBPROXY_AWG \
+  -m conntrack --ctstate ESTABLISHED,RELATED \
+  -j CONNMARK --restore-mark
+
+sudo iptables -t mangle -A WEBPROXY_AWG \
+  -m conntrack --ctstate ESTABLISHED,RELATED \
+  -j RETURN
+
+sudo iptables -t mangle -A WEBPROXY_AWG \
+  -m conntrack --ctstate NEW \
   -m set --match-set awg-force dst \
   -j MARK --set-mark 1 \
   -m comment --comment webproxy-awg-force
 
 sudo iptables -t mangle -A WEBPROXY_AWG \
+  -m conntrack --ctstate NEW \
+  -m set --match-set awg-force dst \
+  -j CONNMARK --save-mark
+
+sudo iptables -t mangle -A WEBPROXY_AWG \
+  -m conntrack --ctstate NEW \
+  -m set --match-set awg-force dst \
+  -j RETURN
+
+sudo iptables -t mangle -A WEBPROXY_AWG \
+  -m conntrack --ctstate NEW \
   -m set --match-set ru-direct dst \
   -j RETURN \
   -m comment --comment webproxy-direct
 
 sudo iptables -t mangle -A WEBPROXY_AWG \
+  -m conntrack --ctstate NEW \
   -j MARK --set-mark 1 \
   -m comment --comment webproxy-awg-default
+
+sudo iptables -t mangle -A WEBPROXY_AWG \
+  -m conntrack --ctstate NEW \
+  -j CONNMARK --save-mark
 
 sudo iptables -t mangle -A OUTPUT \
   -m owner --uid-owner 3proxy \
   -j WEBPROXY_AWG \
   -m comment --comment webproxy-owned-output
+
+sudo iptables -t nat -A POSTROUTING \
+  -o awg1 -m mark --mark 1 \
+  -m comment --comment webproxy-awg-snat \
+  -j MASQUERADE
 
 sudo ip route replace default dev awg1 table 100
 sudo ip rule add priority 100 fwmark 1 lookup 100
@@ -664,7 +700,7 @@ curl -sSf http://127.0.0.1:8000/login >/dev/null
 ```ini
 Table = off
 PostUp = /usr/local/sbin/webproxy-routing --interface %i --table 100 --mark 1 --priority 100 --ru-url https://www.ipdeny.com/ipv4-aggregated/ru-aggregated.zone
-PostDown = ip route del default dev %i table 100; ip rule del priority 100 fwmark 1 lookup 100 2>/dev/null || true
+PostDown = iptables -t nat -D POSTROUTING -o %i -m mark --mark 1 -m comment --comment webproxy-awg-snat -j MASQUERADE 2>/dev/null || true; ip route del default dev %i table 100 2>/dev/null || true; ip rule del priority 100 fwmark 1 lookup 100 2>/dev/null || true
 ```
 
 Если используются другие значения, подставьте их из `/etc/web-proxy.env`. Проверьте поддержку `PostUp`, `PostDown` и `%i` именно вашей версией Amnezia-клиента. Запустите helper вручную после поднятия интерфейса и проверьте `ip rule show`, `ip route show table 100` и цепочку `WEBPROXY_AWG` до включения hooks.
@@ -766,9 +802,11 @@ Internet -> nginx/caddy -> 127.0.0.1:8000
 
 ## Статистика 3proxy
 
-По умолчанию приложение читает `/var/log/3proxy/3proxy.log` построчно и агрегирует данные по имени пользователя и дате.
+По умолчанию приложение читает `/var/log/3proxy/3proxy.log` и поддерживаемые ротированные файлы рядом: `3proxy.log.1`, `3proxy.log.YYYY.MM.DD`, а также такие файлы после сжатия в `.gz`. Данные из активного и rotated logs суммируются по имени пользователя и дате.
 
-Шаблон проекта ожидает tab-separated формат:
+Поддерживаются обычные табуляторы и буквальные разделители `\t`, формат времени ISO/`YYYY-MM-DD HH:MM:SS` и Unix epoch (`%t` 3proxy). Строка должна содержать timestamp, username, client, remote, bytes in и bytes out на соответствующих позициях. Событие `Accepting connections` не считается пользовательской сессией.
+
+Формат проекта:
 
 ```text
 timestamp<TAB>username<TAB>client_ip<TAB>remote_host<TAB>bytes_in<TAB>bytes_out<TAB>...
@@ -780,13 +818,15 @@ timestamp<TAB>username<TAB>client_ip<TAB>remote_host<TAB>bytes_in<TAB>bytes_out<
 logformat "- %t\t%U\t%C\t%R\t%I\t%O\t%E\t%p\t%T"
 ```
 
+Подробная статистика пользователя (`GET /api/statistics/user?username=<login>`) также возвращает `recent_websites`: до 10 уникальных доменов, отсортированных по времени последнего обращения. Домен извлекается из URL HTTP-запроса или цели `CONNECT` в поле `%T`; IP-адреса и запросы без hostname не отображаются. Путь и query-параметры запроса не сохраняются и не показываются. Для этой части список логов читается при каждом открытии подробной статистики, поэтому отдельный пересчёт `UsageDaily` не требуется.
+
 Запись новых записей:
 
 ```bash
 sudo tail -n 100 -F /var/log/3proxy/3proxy.log
 ```
 
-Полный пересчёт через API:
+После обновления парсера или добавления старых файлов запустите полный пересчёт через API:
 
 ```bash
 curl -b 'session=<cookie>' \
@@ -795,13 +835,7 @@ curl -b 'session=<cookie>' \
 
 Через curl session-cookie создаётся только после входа в браузере или локального reverse proxy. Не передавайте сессию в публичные скрипты или shell-history.
 
-Для production добавьте параллельный collector с:
-
-- отслеживанием offset/inode при ротации;
-- защитой от повторного чтения логов;
-- ограничением пути и правами чтения;
-- периодическим full reindex;
-- поддержкой конкретного формата `counterin/countout/countall` или `3proxy-fup/JSON`, если используется эта сборка.
+Сборщик выполняет полный пересчёт подходящих файлов при вызове endpoint; он не запускается автоматически по расписанию. Для регулярного обновления настройте cron/systemd timer для `POST /api/statistics/collect`. При очень больших или сжатых архивах используйте отдельный incremental collector с offset/inode. Формат `counterin/countout/countall` и `3proxy-fup/JSON` здесь не читаются — их нужно реализовать отдельно, если именно их выдаёт ваша сборка.
 
 Проверьте активные соединения/счётчики вашей сборкой:
 

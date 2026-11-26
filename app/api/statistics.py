@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.tables import UsageDaily
-from app.services.statistics import collect_usage
+from app.services.statistics import collect_usage, get_recent_websites
 
 router = APIRouter(prefix="/api/statistics", tags=["statistics"])
 
@@ -56,6 +56,7 @@ def user_usage(username: str = Query(min_length=1, max_length=128), db: Session 
         "proxy_user": username,
         "today": today_totals,
         "month": month,
+        "recent_websites": get_recent_websites(username),
         "days": [
             {
                 "day": row.day.isoformat(),

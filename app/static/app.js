@@ -11,12 +11,14 @@ async function userUsage(username){
  detail.innerHTML=`<div class="user-usage-heading"><h3>Статистика пользователя: ${escape(data.proxy_user)}</h3><button type="button" id="close-user-usage">Закрыть</button></div>
  <div class="usage-summary"><div><strong>Сегодня</strong><span>Вход: ${formatBytes(data.today.bytes_in)} · Выход: ${formatBytes(data.today.bytes_out)} · Сессии: ${data.today.sessions}</span></div>
  <div><strong>Текущий месяц</strong><span>Вход: ${formatBytes(data.month.bytes_in)} · Выход: ${formatBytes(data.month.bytes_out)} · Сессии: ${data.month.sessions}</span></div></div>
+ <h4>Последние сайты</h4>
+ ${data.recent_websites.length?`<div class="usage-websites"><table><thead><tr><th>Сайт</th><th>Последнее обращение</th></tr></thead><tbody>${data.recent_websites.map(site=>`<tr><td>${escape(site.domain)}</td><td>${escape(new Date(site.last_accessed).toLocaleString())}</td></tr>`).join('')}</tbody></table></div>`:'<p class="status-empty">Сайты в логах не найдены</p>'}
  <h4>По дням текущего месяца</h4>
  ${data.days.length?`<div class="usage-days"><table><thead><tr><th>Дата</th><th>Вход</th><th>Выход</th><th>Сессии</th></tr></thead><tbody>${data.days.map(row=>`<tr><td>${escape(row.day)}</td><td>${formatBytes(row.bytes_in)}</td><td>${formatBytes(row.bytes_out)}</td><td>${row.sessions}</td></tr>`).join('')}</tbody></table></div>`:'<p class="status-empty">За текущий месяц данных нет</p>'}`
  document.querySelector('#close-user-usage').onclick=()=>{detail.hidden=true;detail.innerHTML=''}
 }
 let routeStatusMode='table'
-const statusLabels={ipsets:'IP sets',iptables:'iptables (mangle)',rules:'IP rules',routes:'Routes'}
+const statusLabels={ipsets:'IP sets',iptables:'iptables (mangle)',nat:'iptables (NAT)',rules:'IP rules',routes:'Routes'}
 function statusLines(value){return String(value??'').split(/\r?\n/).map(line=>line.trimEnd()).filter(line=>line.trim())}
 function renderIpSets(value){
  const lines=statusLines(value),sets=[]

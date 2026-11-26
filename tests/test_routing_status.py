@@ -8,7 +8,7 @@ from app.services import routing
 
 
 def test_status_calls_privileged_read_only_helper(monkeypatch):
-    expected = {"ipsets": "sets", "iptables": "chain", "rules": "rules", "routes": "routes"}
+    expected = {"ipsets": "sets", "iptables": "chain", "nat": "nat", "rules": "rules", "routes": "routes"}
     calls = []
 
     def fake_run(command, **kwargs):

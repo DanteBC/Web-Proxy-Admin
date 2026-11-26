@@ -109,18 +109,43 @@ def configure_chain(proxy_uid: int | None, mark: str = MARK) -> None:
     run("iptables", "-t", "mangle", "-F", CHAIN)
 
     run("iptables", "-t", "mangle", "-A", CHAIN,
+        "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED",
+        "-j", "CONNMARK", "--restore-mark")
+
+    run("iptables", "-t", "mangle", "-A", CHAIN,
+        "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED",
+        "-j", "RETURN")
+
+    run("iptables", "-t", "mangle", "-A", CHAIN,
+        "-m", "conntrack", "--ctstate", "NEW",
         "-m", "set", "--match-set", FORCE_SET, "dst",
         "-j", "MARK", "--set-mark", mark,
         "-m", "comment", "--comment", "webproxy-awg-force")
 
     run("iptables", "-t", "mangle", "-A", CHAIN,
+        "-m", "conntrack", "--ctstate", "NEW",
+        "-m", "set", "--match-set", FORCE_SET, "dst",
+        "-j", "CONNMARK", "--save-mark")
+
+    run("iptables", "-t", "mangle", "-A", CHAIN,
+        "-m", "conntrack", "--ctstate", "NEW",
+        "-m", "set", "--match-set", FORCE_SET, "dst",
+        "-j", "RETURN")
+
+    run("iptables", "-t", "mangle", "-A", CHAIN,
+        "-m", "conntrack", "--ctstate", "NEW",
         "-m", "set", "--match-set", RU_SET, "dst",
         "-j", "RETURN",
         "-m", "comment", "--comment", "webproxy-direct")
 
     run("iptables", "-t", "mangle", "-A", CHAIN,
+        "-m", "conntrack", "--ctstate", "NEW",
         "-j", "MARK", "--set-mark", mark,
         "-m", "comment", "--comment", "webproxy-awg-default")
+
+    run("iptables", "-t", "mangle", "-A", CHAIN,
+        "-m", "conntrack", "--ctstate", "NEW",
+        "-j", "CONNMARK", "--save-mark")
 
     if proxy_uid is not None:
         ensure_jump("mangle", "OUTPUT", [
@@ -165,6 +190,15 @@ def configure_policy_route(interface: str, table: str = TABLE, mark: str = MARK,
         run("ip", "rule", "add", "priority", priority, "fwmark", mark, "lookup", table)
 
 
+def configure_masquerade(interface: str, mark: str = MARK) -> None:
+    ensure_jump("nat", "POSTROUTING", [
+        "POSTROUTING", "-o", interface,
+        "-m", "mark", "--mark", mark,
+        "-m", "comment", "--comment", "webproxy-awg-snat",
+        "-j", "MASQUERADE",
+    ])
+
+
 def add_networks(name: str, networks: list[str]) -> None:
     ensure_ipset(name)
     for network in networks:
@@ -182,6 +216,7 @@ def status(table: str = TABLE) -> dict[str, str]:
     commands = {
         "ipsets": ["ipset", "list"],
         "iptables": ["iptables", "-t", "mangle", "-n", "-v", "-L", CHAIN],
+        "nat": ["iptables", "-t", "nat", "-n", "-v", "-L", "POSTROUTING"],
         "rules": ["ip", "rule", "show"],
         "routes": ["ip", "route", "show", "table", table],
     }
@@ -243,6 +278,7 @@ def main() -> None:
 
         configure_chain(proxy_uid, args.mark)
         configure_policy_route(args.interface, args.table, args.mark, args.priority)
+        configure_masquerade(args.interface, args.mark)
 
 
 if __name__ == "__main__":

@@ -45,7 +45,7 @@ def status() -> dict:
         raise RoutingError("Routing status helper returned invalid JSON") from exc
 
     if not isinstance(output, dict) or not all(
-        isinstance(output.get(name), str) for name in ("ipsets", "iptables", "rules", "routes")
+        isinstance(output.get(name), str) for name in ("ipsets", "iptables", "nat", "rules", "routes")
     ):
         raise RoutingError("Routing status helper returned an unexpected response")
     return output
